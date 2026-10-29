@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sports Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏆</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="css/styles.css" rel="stylesheet">
+    <script>
+        // Apply the saved theme (light / dark / system) before paint to avoid a flash
+        (function () {
+            let pref = "system";
+            try { pref = localStorage.getItem("mm-theme") || "system"; } catch (e) {}
+            const dark = pref === "dark" || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+            document.documentElement.setAttribute("data-bs-theme", dark ? "dark" : "light");
+            document.documentElement.dataset.themePref = pref;
+        })();
+    </script>
+</head>
+<body>
+<div class="bg-glow" aria-hidden="true"></div>
+
+<!-- ========== Top bar ========== -->
+<nav class="topbar">
+    <div class="container-wide d-flex align-items-center gap-3">
+        <a class="brand" href="/">
+            <span class="brand-mark"><i class="bi bi-broadcast"></i></span>
+            <span class="brand-text">Sports<span>Monitor</span></span>
+        </a>
+
+        <div class="ms-auto d-flex align-items-center gap-2">
+            <div class="refresh-chip d-none d-md-flex" title="Last updated">
+                <span class="dot" id="refreshDot"></span>
+                <span id="lastUpdated">Not loaded</span>
+            </div>
+            <div class="form-check form-switch auto-switch mb-0" title="Refresh every 60 seconds">
+                <input class="form-check-input" type="checkbox" role="switch" id="autoRefresh">
+                <label class="form-check-label" for="autoRefresh">Auto <span id="countdown" class="countdown"></span></label>
+            </div>
+            <button class="icon-btn" id="refreshBtn" title="Refresh now (R)"><i class="bi bi-arrow-clockwise"></i></button>
+            <button class="icon-btn oracle-toggle d-xl-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#oracle"
+                    aria-controls="oracle" title="Sport Oracle (O)">🔮</button>
+            <div class="theme-switch" role="radiogroup" aria-label="Colour theme" id="themeSwitch" title="Theme (T)">
+                <button type="button" role="radio" data-theme="light" title="Light mode"><i class="bi bi-sun"></i><span>Light</span></button>
+                <button type="button" role="radio" data-theme="dark" title="Dark mode"><i class="bi bi-moon-stars"></i><span>Dark</span></button>
+                <button type="button" role="radio" data-theme="system" title="Match system setting"><i class="bi bi-circle-half"></i><span>System</span></button>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="app-shell container-wide">
+<main class="app-main pb-5">
+
+    <!-- ========== Sport switcher ========== -->
+    <nav class="sport-tabs" id="sportTabs" role="tablist" aria-label="Sport"></nav>
+
+    <!-- ========== Competition header ========== -->
+    <header class="league-hero">
+        <div class="league-logo-wrap">
+            <img id="leagueLogo" alt="" class="league-logo d-none">
+            <span class="league-logo-fallback" id="leagueLogoFallback">🏆</span>
+        </div>
+        <div class="min-w-0">
+            <div class="eyebrow" id="leagueSeason">Fixtures &amp; results</div>
+            <h1 class="league-title" id="leagueName">Loading…</h1>
+            <div class="league-sub" id="leagueSub">Fetching the latest data from ESPN</div>
+        </div>
+    </header>
+
+    <!-- ========== Filters ========== -->
+    <section class="panel filters">
+        <div class="row g-3 align-items-end">
+            <div class="col-12 col-md-6 col-wide-3">
+                <label class="field-label" for="leagueSelect">Competition</label>
+                <div class="input-icon">
+                    <i class="bi bi-trophy"></i>
+                    <select class="form-select" id="leagueSelect"></select>
+                </div>
+                <input type="text" class="form-control mt-2 d-none" id="customLeague" placeholder="e.g. bel.1 then press Enter" maxlength="20">
+            </div>
+
+            <div class="col-12 col-md-6 col-wide-3">
+                <label class="field-label" for="dateInput">Date</label>
+                <div class="date-group">
+                    <button class="icon-btn sm" id="prevDay" title="Previous day"><i class="bi bi-chevron-left"></i></button>
+                    <input type="date" class="form-control" id="dateInput">
+                    <button class="icon-btn sm" id="nextDay" title="Next day"><i class="bi bi-chevron-right"></i></button>
+                    <button class="pill-btn" id="matchdayBtn" title="Show ESPN's current events">Latest</button>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6 col-wide-3">
+                <label class="field-label" for="teamInput"><span id="searchLabel">Team</span> <kbd>/</kbd></label>
+                <div class="input-icon">
+                    <i class="bi bi-search"></i>
+                    <input type="text" class="form-control" id="teamInput" placeholder="All teams" list="teamList" autocomplete="off">
+                    <button class="clear-btn d-none" id="clearTeam" title="Clear"><i class="bi bi-x-lg"></i></button>
+                    <datalist id="teamList"></datalist>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6 col-wide-3">
+                <span class="field-label">Status</span>
+                <div class="segmented" role="tablist" id="statusFilter">
+                    <button class="active" data-status="all">All</button>
+                    <button data-status="live"><span class="live-dot"></span>Live</button>
+                    <button data-status="completed">Final</button>
+                    <button data-status="scheduled">Upcoming</button>
+                </div>
+            </div>
+        </div>
+        <div class="sport-note d-none" id="sportNote"><i class="bi bi-info-circle"></i><span></span></div>
+    </section>
+
+    <!-- ========== Stats ========== -->
+    <section class="stats-grid">
+        <div class="stat">
+            <div class="stat-icon"><i class="bi bi-calendar2-week"></i></div>
+            <div><div class="stat-value" id="statTotal">–</div><div class="stat-label" id="statTotalLabel">Events</div></div>
+        </div>
+        <div class="stat stat-live">
+            <div class="stat-icon"><i class="bi bi-broadcast-pin"></i></div>
+            <div><div class="stat-value" id="statLive">–</div><div class="stat-label">Live now</div></div>
+        </div>
+        <div class="stat">
+            <div class="stat-icon"><i class="bi bi-flag"></i></div>
+            <div><div class="stat-value" id="statDone">–</div><div class="stat-label">Completed</div></div>
+        </div>
+        <div class="stat">
+            <div class="stat-icon"><i class="bi bi-clock"></i></div>
+            <div><div class="stat-value" id="statUpcoming">–</div><div class="stat-label">Upcoming</div></div>
+        </div>
+        <div class="stat">
+            <div class="stat-icon"><i class="bi bi-bullseye" id="statExtraIcon"></i></div>
+            <div><div class="stat-value" id="statExtra">–</div><div class="stat-label" id="statExtraLabel">Goals</div></div>
+        </div>
+    </section>
+
+    <!-- ========== Tabs ========== -->
+    <ul class="nav view-tabs" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabMatches" type="button"><i class="bi bi-grid-1x2"></i> <span id="resultsTabLabel">Results</span></button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabReport" type="button"><i class="bi bi-file-earmark-text"></i> Report</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabLog" type="button" id="logTabBtn"><i class="bi bi-terminal"></i> Activity log</button></li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- Results -->
+        <div class="tab-pane fade show active" id="tabMatches" role="tabpanel">
+            <div id="matchesContainer"></div>
+        </div>
+
+        <!-- Report -->
+        <div class="tab-pane fade" id="tabReport" role="tabpanel">
+            <div class="row g-4">
+                <div class="col-lg-4">
+                    <div class="panel h-100">
+                        <h2 class="panel-title"><i class="bi bi-gear"></i> Report settings</h2>
+                        <p class="panel-text">Generates a text report from the current sport and filters, using the same business rules as the command-line automation.</p>
+
+                        <dl class="settings-list" id="settingsSummary"></dl>
+
+                        <label class="field-label" for="outputFile">Output file</label>
+                        <div class="input-icon mb-3">
+                            <i class="bi bi-file-earmark"></i>
+                            <input type="text" class="form-control" id="outputFile" value="football_report.txt">
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-accent" id="generateBtn"><i class="bi bi-lightning-charge-fill"></i> Generate report</button>
+                            <button class="btn btn-ghost" id="saveConfigBtn"><i class="bi bi-save"></i> Save as default config</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-8">
+                    <div class="panel h-100 d-flex flex-column">
+                        <div class="d-flex align-items-center gap-2 mb-3">
+                            <h2 class="panel-title mb-0"><i class="bi bi-file-earmark-text"></i> <span id="reportFileName">Preview</span></h2>
+                            <button class="icon-btn sm ms-auto" id="copyReport" title="Copy" disabled><i class="bi bi-clipboard"></i></button>
+                            <button class="icon-btn sm" id="downloadReport" title="Download" disabled><i class="bi bi-download"></i></button>
+                        </div>
+                        <pre class="report-view flex-grow-1" id="reportView"><span class="text-muted-2">No report generated yet. Choose your filters and click “Generate report”.</span></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="tab-pane fade" id="tabLog" role="tabpanel">
+            <div class="panel">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                    <h2 class="panel-title mb-0"><i class="bi bi-terminal"></i> automation.log</h2>
+                    <div class="segmented sm ms-auto" id="logFilter">
+                        <button class="active" data-level="ALL">All</button>
+                        <button data-level="INFO">Info</button>
+                        <button data-level="WARNING">Warnings</button>
+                        <button data-level="ERROR">Errors</button>
+                    </div>
+                    <button class="icon-btn sm" id="refreshLog" title="Refresh log"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+                <div class="log-view" id="logView"></div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<!-- ========== Sport Oracle (right sidebar; a slide-out drawer below 1200px) ========== -->
+<aside class="oracle offcanvas-xl offcanvas-end" tabindex="-1" id="oracle" aria-labelledby="oracleTitle">
+    <div class="offcanvas-body">
+        <div class="oracle-inner">
+            <header class="oracle-head">
+                <div class="oracle-mark" aria-hidden="true">🔮</div>
+                <div class="min-w-0">
+                    <h2 class="oracle-title" id="oracleTitle">Sport Oracle</h2>
+                    <div class="oracle-sub">Next 10 fixtures · predicted winners</div>
+                </div>
+                <button class="icon-btn sm ms-auto" id="oracleRefresh" title="Refresh predictions"><i class="bi bi-arrow-clockwise"></i></button>
+                <button class="icon-btn sm d-xl-none" type="button" data-bs-dismiss="offcanvas" data-bs-target="#oracle" title="Close"><i class="bi bi-x-lg"></i></button>
+            </header>
+
+            <div class="oracle-controls">
+                <div class="segmented oracle-sports" id="oracleSports" role="tablist" aria-label="Oracle sport"></div>
+                <div class="input-icon">
+                    <i class="bi bi-trophy"></i>
+                    <select class="form-select" id="oracleLeague" aria-label="Oracle competition"></select>
+                </div>
+            </div>
+
+            <div class="oracle-list" id="oracleList"></div>
+
+            <details class="oracle-about">
+                <summary><i class="bi bi-info-circle"></i> How the Oracle predicts</summary>
+                <p id="oracleMethod">
+                    Each team gets a rating from its season win rate (45%), last-5 form (35%) and average
+                    scoring margin (20%), plus a home-advantage bonus. The gap becomes home / draw / away
+                    chances, blended slightly towards typical results so early-season data can't make it
+                    overconfident. MMA picks use career records only.
+                </p>
+                <p class="mb-0"><strong>For fun, not betting advice.</strong> It doesn't know about injuries, line-ups or travel.</p>
+            </details>
+        </div>
+    </div>
+</aside>
+</div>
+
+<footer class="site-footer container-wide">
+    Data from ESPN's public APIs · Sports Monitor
+</footer>
+
+<!-- ========== Match modal (opened from a Sport Oracle card) ========== -->
+<div class="modal fade" id="matchModal" tabindex="-1" aria-labelledby="matchModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down">
+        <div class="modal-content match-modal">
+            <div class="modal-header">
+                <button type="button" class="icon-btn sm d-none" id="betBack" title="Back to match details"><i class="bi bi-arrow-left"></i></button>
+                <div class="min-w-0">
+                    <div class="mm-eyebrow" id="mmEyebrow"></div>
+                    <h2 class="modal-title" id="matchModalTitle">Match</h2>
+                </div>
+                <button type="button" class="btn-close ms-auto" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="mmBody"></div>
+            <div class="modal-footer" id="mmFooter">
+                <span class="mm-foot-note" id="mmFootNote"></span>
+                <button type="button" class="btn btn-bet" id="betBtn"><i class="bi bi-cash-coin"></i> Bet</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toastContainer"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
