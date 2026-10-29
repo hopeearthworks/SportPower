@@ -1,0 +1,22 @@
+Football Match Monitor - Test Results
+Run at: 2026-10-29 12:04
+====================================================================================================
+Test                          Expected                                    Actual              Result
+----------------------------------------------------------------------------------------------------
+Scottish league (sco.1)       Report lists Scottish Premiership matches   exit=0              Pass
+English league (eng.1)        Report lists Premier League matches         exit=0              Pass
+Valid team (Celtic)           Only Celtic matches in report               1 match(es), exit=0 Pass
+Invalid team                  Report says no matches found, no crash      exit=0              Pass
+Completed matches only        Only completed matches in report            2 match(es), exit=0 Pass
+Missing configuration file    Friendly error, exit code 1, no traceback   exit=1              Pass
+Invalid league code           API error handled, exit code 1              exit=1              Pass
+Invalid config value          Config validation rejects bad value         exit=1              Pass
+----------------------------------------------------------------------------------------------------
+8/8 tests passed
+
+Workshop checklist
+------------------------------
+API returned data        Pass
+Report created           Pass
+Team filter worked       Pass
+Configuration loaded     Pass
