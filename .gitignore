@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Secrets - never commit API keys
+odds_api.key
+.env
+
+# Runtime output (regenerated on every run)
+automation.log
+*.log
+combat_report.txt
+rugby_report.txt
+f1_report.txt
+cricket_report.txt
+test_config.json
+test_report.txt
+.screens/
+
+# OS
+.DS_Store
+Thumbs.db
