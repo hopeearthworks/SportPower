@@ -1,0 +1,8 @@
+{
+    "sport": "football",
+    "league": "sco.1",
+    "team_filter": "Celtic",
+    "output_file": "football_report.txt",
+    "match_status": "all",
+    "date": "20261025"
+}
