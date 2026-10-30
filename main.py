@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +40,18 @@ def safe_output_path(output_file):
     return os.path.join(BASE_DIR, name)
 
 
+class MonitorServer(ThreadingHTTPServer):
+    # On Windows, address reuse lets a second copy of the server share the port, so requests
+    # could be answered by an old copy still running. Refuse to start instead.
+    allow_reuse_address = os.name != "nt"
+
+    def handle_error(self, request, client_address):
+        # The browser cancelled a request (page refreshed or sport switched mid-load): nothing to report
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
+
 class MonitorHandler(SimpleHTTPRequestHandler):
     """Serves static files from ./web and JSON from /api/*."""
 
@@ -47,6 +60,12 @@ class MonitorHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass  # keep the console quiet; activity goes to automation.log
+
+    def end_headers(self):
+        # Make browsers re-check the dashboard files so an update shows without a hard refresh
+        if not self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
 
     # ---------- helpers ----------
 
@@ -226,7 +245,7 @@ class MonitorHandler(SimpleHTTPRequestHandler):
 
 def main():
     try:
-        server = ThreadingHTTPServer((HOST, PORT), MonitorHandler)
+        server = MonitorServer((HOST, PORT), MonitorHandler)
     except OSError as error:
         print(f"Unable to start on port {PORT} (is it already in use?): {error}")
         logging.error("[UI] Unable to start web server on port %d: %s", PORT, error)
