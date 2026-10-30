@@ -98,8 +98,9 @@ Other shortcuts: `/` focuses the search box and `R` refreshes.
 ### Sport Oracle (right sidebar)
 
 On screens 1200px and wider the **Sport Oracle** sits on the right. On smaller screens
-open it with the 🔮 button in the top bar (or press `O`). Choose a sport (Football, Rugby
-or Combat) and a competition, and it shows the **next 10 fixtures** with:
+open it with the 🔮 button in the top bar (or press `O`). Choose a sport (Football, Rugby,
+F1, Cricket or Combat) and a competition. For the team sports and MMA it shows the **next 10 fixtures** with
+(F1 and cricket are described [below](#formula-1-in-the-sport-oracle)):
 
 - home / draw / away win chances as percentages and a bar
 - the Oracle's pick (★) and a confidence label: **Strong** (≥60%), **Lean** (≥45%) or **Toss-up**
@@ -113,8 +114,6 @@ How it predicts (see `oracle.py`):
 
 Results are cached for 10 minutes, and the ↻ button forces a refresh. Predictions are for
 fun, not betting advice. The model knows nothing about injuries, line-ups or travel.
-F1 and cricket aren't included: F1 has no head-to-head matches, and the cricket feed has
-no form or standings to predict from.
 
 ### Game details from the results list
 
@@ -129,6 +128,48 @@ no form or standings to predict from.
 | Combat Sports | The **whole** fight card: weight class, records, winners, round and time, scheduled rounds |
 
 ESPN has no detail feed for F1 or MMA, so those two views use the full results already loaded.
+
+### Formula 1 in the Sport Oracle
+
+Choose **F1** in the Oracle to see every Grand Prix still to run this season. Each card shows
+the three favourites with their chance to win, the Oracle's pick and its podium chance.
+**Click a race** for every driver's win and podium chances, their points per race, last 5
+results, championship position and the weekend schedule in your local time.
+
+How it predicts:
+- **Driver rating:** 55% season championship points per race (shrunk towards the field average
+  early in the season) and 45% average points over the last 5 races.
+- **Starting grid:** once qualifying has finished, the grid counts for 40% of the rating
+  (pole = 25, 2nd = 18 … 10th = 1).
+- **Simulation:** each race is simulated 5,000 times to get win and podium chances, blended 10%
+  towards every driver having an equal chance. Confidence is **Strong** (≥40% to win),
+  **Lean** (≥25%) or **Toss-up**.
+- Drivers who missed the latest race are left out, as they've usually lost their seat.
+
+Until qualifying, every remaining race gets the same prediction, because the model knows
+nothing about individual circuits, car upgrades, penalties or weather. F1 has no Bet button.
+
+### Cricket in the Sport Oracle
+
+Choose **Cricket** in the Oracle to see the next 10 matches across every competition in ESPN's
+feed (looking up to 14 days ahead), grouped by competition, with the format (Test, First-class,
+List A, T20 …) next to the start time. Once the matches have loaded, the competition list also
+offers each competition on its own. **Click a match** for the prediction, each team's last 5 results,
+match notes and news.
+
+How it predicts:
+- **Season record (60%):** win rate from the competition's table, where ESPN publishes one.
+  Bilateral tours have no table.
+- **Form (40%):** results from the last 3 weeks in any competition, shrunk towards average
+  because a team often has only one or two results.
+- **Home advantage:** a bonus for the home side.
+- **Draws:** only Tests and first-class (multi-day) matches can be drawn. Limited-overs matches
+  show home and away chances only.
+- When neither team has a table or recent results, the card says so and the pick is mostly
+  home advantage.
+
+ESPN's cricket feed has one request per day, so the first load takes about 6 seconds while
+three weeks of results are read. After that, it's cached. Cricket has no Bet button.
 
 ### Match details and the Bet button
 
@@ -222,7 +263,7 @@ missing config file, invalid league code, and invalid config value.
 |---|---|
 | `main.py` | Entry point: web server and JSON API for the dashboard (port 8080) |
 | `sports.py` | Multi-sport data layer: ESPN feeds, data normalisation, filters, report formatting |
-| `oracle.py` | Sport Oracle: finds the next 10 fixtures, fetches standings, predicts winners |
+| `oracle.py` | Sport Oracle: finds the next 10 fixtures or remaining Grands Prix, fetches standings, predicts winners |
 | `match_centre.py` | Match detail (form, head-to-head, table, news) and bookmaker odds for the Oracle modal |
 | `odds_api.key` *(optional, you create it)* | Your private The Odds API key |
 | `AUTOMATION_WORKSHEET.md` | Automation definition, benefits, risks, feature progress log, future features |

@@ -294,6 +294,33 @@ friendly empty state was added.
 *Checks:* `/api/game` tested (valid, F1 returns "not available", bad ID → 400, bad sport → 400).
 Screenshots of the results modal for all 5 sports with live data. 8/8 regression tests still pass.
 
+### Phase 9: Formula 1 in the Sport Oracle
+
+| # | Feature | Files | Status |
+|---|---|---|---|
+| 9.1 | Research: ESPN's F1 standings list every driver's points in each race this season, and the scoreboard accepts a date range for all remaining Grands Prix in one request. Qualifying competitor IDs match the standings' driver IDs. | — | ✅ Done |
+| 9.2 | `predict_race()`: rating = 55% season points per race + 45% last 5 races (40% grid once qualifying is done), 5,000 seeded Plackett-Luce simulations for win and podium chances, blended 10% towards an open race. Drivers who missed the latest round are left out. | `oracle.py` | ✅ Done |
+| 9.3 | F1 added to the Oracle sports (`"oracle": True`), so `/api/oracle` accepts it | `sports.py` | ✅ Done |
+| 9.4 | Oracle race cards (top 3 with win bars, pick, podium chance, "Why this pick?") and a race modal (every driver's chances, grid, points per race, last 5, championship, weekend schedule). No Bet view for F1. | `app.js`, `styles.css`, `index.html` | ✅ Done |
+
+*Checks:* Live forecast for the 5 remaining 2026 races (about 1 s). Grid path tested with the US GP
+qualifying. Football and UFC forecasts unchanged. Headless Chrome screenshots of the sidebar and race modal.
+
+### Phase 10: Cricket in the Sport Oracle
+
+| # | Feature | Files | Status |
+|---|---|---|---|
+| 10.1 | Research: the cricket header feed accepts `dates=YYYYMMDD` (one day at a time). Competition tables exist at `/apis/v2/sports/cricket/{id}/standings` for leagues but not bilateral tours. Team IDs match between the two. Each match carries its format (`class.generalClassCard`). | — | ✅ Done |
+| 10.2 | Upcoming matches (14 days ahead, TBA knockout slots skipped) and team form (last 21 days, any competition). Day feeds are cached, with older days kept for 6 hours. | `oracle.py` | ✅ Done |
+| 10.3 | Cricket model: 60% table win rate + 40% form (shrunk for small samples), home advantage, draws only in Tests and first-class matches | `oracle.py` | ✅ Done |
+| 10.4 | Standings parser reads cricket's `matchesWon/Lost/Draw/Tied`. The team rating skips scoring margin when a table has no points for/against. | `oracle.py` | ✅ Done |
+| 10.5 | Oracle UI: cricket tab, competition headings, format tag, competition list built from the feed, match modal with recent results, match notes and news. No Bet view. | `app.js`, `styles.css`, `index.html` | ✅ Done |
+| 10.6 | Fixes: Oracle tabs stack icon over label so five sports fit; group headings no longer collapse to zero height; main sport tabs wrap instead of being cut off; dashboard files are versioned and sent with `Cache-Control: no-cache` | `styles.css`, `index.html`, `main.py` | ✅ Done |
+
+*Checks:* Live forecast across 7 competitions (about 6 s cold, under 1 s cached). Single competition
+(Ranji Trophy) returns 10 matches. `/api/game` for an upcoming Test returns the venue, notes and news.
+Football and rugby forecasts unchanged. Headless Chrome screenshots of the sidebar and match modal.
+
 ### Phase 6: Documentation
 
 | # | Item | Status |
