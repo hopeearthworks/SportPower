@@ -15,10 +15,20 @@ typical home/draw/away split to avoid overconfident picks.
 
 Combat sports - each fighter's career win rate from their record, turned
 into win probabilities the same way and blended 25% towards 50/50. No draws.
+
+Formula 1 - each driver gets a pace rating in championship points per race:
+    55%  season average (shrunk towards the field average early on)
+    45%  last 5 races
+Once qualifying has finished, the grid counts for 40% (pole = 25 points,
+2nd = 18 ... 10th = 1). The race is then simulated thousands of times,
+drawing the finishing order with each driver's chance of beating the rest
+in proportion to rating^2.5, to get win and podium chances. Chances are
+blended 10% towards an open race where every driver is equal.
 """
 
 import logging
 import math
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -40,6 +50,13 @@ TUNING = {
 }
 PRIOR_WEIGHT = 0.15
 COMBAT_PRIOR_WEIGHT = 0.25  # records are a weaker signal, so lean harder on 50/50
+
+F1_STANDINGS = "https://site.api.espn.com/apis/v2/sports/racing/f1/standings"
+F1_POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
+F1_PRIOR_WEIGHT = 0.10    # blend towards every driver having the same chance
+F1_GRID_WEIGHT = 0.40     # share of the rating taken from the starting grid once qualifying is done
+F1_SHARPNESS = 2.5        # how strongly a higher rating turns into finishing ahead
+F1_SIMULATIONS = 5000
 
 _cache = {}
 _cache_lock = threading.Lock()
@@ -125,6 +142,69 @@ def _upcoming_bouts(league):
     return name, (info.get("logos") or [{}])[0].get("href", ""), bouts[:FIXTURE_COUNT]
 
 
+def _upcoming_races():
+    """Grands Prix whose race hasn't finished yet, with the grid once qualifying is done."""
+    url = sports.ESPN_SCOREBOARD.format(path=sports.espn_path("f1", "f1"))
+    today = datetime.now(timezone.utc).date()
+    # Start a few days back so a race weekend that is already under way is included
+    window = f"{today - timedelta(days=4):%Y%m%d}-{today + timedelta(days=200):%Y%m%d}"
+    data = sports.get_json(url, {"dates": window})
+    info = (data.get("leagues") or [{}])[0]
+    name = info.get("name") or sports.league_name("f1", "f1")
+
+    code = lambda c: (c.get("type") or {}).get("abbreviation", "")
+    status = lambda c: (c.get("status") or {}).get("type") or {}
+    races = []
+    for event in data.get("events", []):
+        sessions = event.get("competitions") or []
+        race = next((c for c in sessions if code(c) == "Race"), None)
+        if not race or status(race).get("completed"):
+            continue
+        qualifying = next((c for c in sessions if code(c) == "Qual" and status(c).get("completed")), None)
+        grid = {}
+        for competitor in (qualifying or {}).get("competitors", []):
+            athlete = competitor.get("athlete") or {}
+            grid[str(competitor.get("id"))] = {"position": competitor.get("order"),
+                                               "name": athlete.get("displayName", "Unknown"),
+                                               "flag": athlete.get("flag") or {}}
+        races.append({
+            "event": event,
+            "date": race.get("date") or event.get("date"),
+            "grid": grid,
+            "sessions": [{"name": sports.F1_SESSIONS.get(code(c), code(c) or "Session"),
+                          "date": c.get("date"), **sports._status(status(c))} for c in sessions],
+        })
+    races.sort(key=lambda r: r["date"] or "")
+    return name, (info.get("logos") or [{}])[0].get("href", ""), races[:FIXTURE_COUNT]
+
+
+def _drivers():
+    """Current drivers from the championship table, with their points in each race this season."""
+    data = _safe_get(F1_STANDINGS)
+    group = next((g for g in data.get("children", []) if "driver" in (g.get("name") or "").lower()), {})
+    drivers, last_round = [], -1
+    for entry in (group.get("standings") or {}).get("entries", []):
+        athlete = entry.get("athlete") or {}
+        stats = entry.get("stats") or []
+        rounds = [i for i, stat in enumerate(stats) if stat.get("played")]  # same calendar order for every driver
+        values = {stat.get("name"): stat.get("value") for stat in stats}
+        flag = athlete.get("flag") or {}
+        drivers.append({
+            "id": str(athlete.get("id") or ""),
+            "name": athlete.get("displayName", "Unknown"),
+            "abbr": athlete.get("abbreviation", ""),
+            "flag": flag.get("href", ""),
+            "country": flag.get("alt", ""),
+            "rank": values.get("rank"),
+            "points": values.get("championshipPts") or 0,
+            "results": [stats[i].get("value") or 0 for i in rounds],
+            "rounds": set(rounds),
+        })
+        last_round = max([last_round, *rounds])
+    # Drivers who sat out the latest round have usually lost their seat (reserves, replaced drivers)
+    return [d for d in drivers if last_round < 0 or last_round in d["rounds"]]
+
+
 def _standings(sport, league):
     """Map team id -> season stats. Returns {} when the competition has no table."""
     path = sports.espn_path(sport, league)
@@ -175,10 +255,10 @@ def _team_rating(side, table, tuning):
     return rating, row, "".join(form), margin
 
 
-def _confidence(probability):
-    if probability >= 0.6:
+def _confidence(probability, strong=0.6, lean=0.45):
+    if probability >= strong:
         return "Strong"
-    if probability >= 0.45:
+    if probability >= lean:
         return "Lean"
     return "Toss-up"
 
@@ -249,6 +329,79 @@ def predict_bout(bout):
     }
 
 
+def _driver_rating(driver, field_average, grid):
+    results = driver["results"]
+    season = (sum(results) + 2 * field_average) / (len(results) + 2)  # two average races so small samples can't dominate
+    recent = results[-5:]
+    form = (sum(recent) + field_average) / (len(recent) + 1)
+    rating = 0.55 * season + 0.45 * form
+    if grid:
+        slot = (grid.get(driver["id"]) or {}).get("position") or 99
+        grid_points = F1_POINTS[slot - 1] if slot <= len(F1_POINTS) else 0.5
+        rating = (1 - F1_GRID_WEIGHT) * rating + F1_GRID_WEIGHT * grid_points
+    return rating, season, recent
+
+
+def _simulate(ratings, seed):
+    """Monte Carlo races: each driver's share of wins and podiums."""
+    rng = random.Random(seed)  # seeded so the same data always gives the same numbers
+    strength = [F1_SHARPNESS * math.log(max(r, 0.1)) for r in ratings]
+    wins, podiums = [0] * len(ratings), [0] * len(ratings)
+    for _ in range(F1_SIMULATIONS):
+        # Adding Gumbel noise and sorting draws a finishing order in which each driver
+        # beats the rest of the field in proportion to rating^sharpness (Plackett-Luce)
+        noisy = [s - math.log(-math.log(rng.random() or 1e-12)) for s in strength]
+        order = sorted(range(len(noisy)), key=noisy.__getitem__, reverse=True)
+        wins[order[0]] += 1
+        for i in order[:3]:
+            podiums[i] += 1
+    return [w / F1_SIMULATIONS for w in wins], [p / F1_SIMULATIONS for p in podiums]
+
+
+def predict_race(race, drivers):
+    """Win and podium chances for every driver. Returns None before any race has been run."""
+    grid = race["grid"]
+    field = list(drivers)
+    if grid:
+        field = [d for d in drivers if d["id"] in grid]
+        known = {d["id"] for d in field}
+        for driver_id, slot in grid.items():  # stand-in drivers who aren't in the table yet
+            if driver_id not in known:
+                field.append({"id": driver_id, "name": slot["name"], "abbr": "", "flag": slot["flag"].get("href", ""),
+                              "country": slot["flag"].get("alt", ""), "rank": None, "points": 0, "results": []})
+    races_run = sum(len(d["results"]) for d in field)
+    if not races_run:
+        return None
+
+    field_average = sum(sum(d["results"]) for d in field) / races_run
+    rated = [(d, *_driver_rating(d, field_average, grid)) for d in field]
+    wins, podiums = _simulate([r[1] for r in rated], race["event"].get("id") or "f1")
+    size = len(rated)
+
+    table = [{
+        "id": driver["id"], "name": driver["name"], "abbr": driver["abbr"],
+        "flag": driver["flag"], "country": driver["country"],
+        "rank": int(driver["rank"]) if driver["rank"] else None,
+        "points": int(driver["points"]),
+        "season_avg": round(season, 1),
+        "last5": [int(v) for v in recent],
+        "grid": (grid.get(driver["id"]) or {}).get("position"),
+        "rating": round(rating, 1),
+        "win": round((1 - F1_PRIOR_WEIGHT) * win + F1_PRIOR_WEIGHT / size, 3),
+        "podium": round((1 - F1_PRIOR_WEIGHT) * podium + F1_PRIOR_WEIGHT * min(3, size) / size, 3),
+    } for (driver, rating, season, recent), win, podium in zip(rated, wins, podiums)]
+    table.sort(key=lambda d: (-d["win"], -d["podium"]))
+
+    return {
+        "pick": table[0]["id"],
+        "pick_name": table[0]["name"],
+        "confidence": _confidence(table[0]["win"], strong=0.40, lean=0.25),
+        "drivers": table,
+        "note": "Based on the starting grid, season points and recent form." if grid
+                else "Based on season points per race and the last 5 races. Updates once qualifying is done.",
+    }
+
+
 # ---------------------------------------------------------------- public API
 
 def _side_summary(side):
@@ -259,7 +412,21 @@ def _side_summary(side):
 
 def build_forecast(sport, league):
     """Return the next fixtures with predictions. Raises sports.FetchError on failure."""
-    if sport == "combat":
+    if sport == "f1":
+        name, logo, races = _upcoming_races()
+        drivers = _drivers() if races else []
+        fixtures = [{
+            "id": race["event"].get("id"),
+            "kind": "race",
+            "name": race["event"].get("name", ""),
+            "date": race["date"],
+            "venue": (race["event"].get("circuit") or {}).get("fullName", ""),
+            "location": sports._place((race["event"].get("circuit") or {}).get("address")),
+            "context": name,
+            "sessions": race["sessions"],
+            "prediction": predict_race(race, drivers),
+        } for race in races]
+    elif sport == "combat":
         name, logo, bouts = _upcoming_bouts(league)
         fixtures = [{
             "id": f"{item['card']['id']}-{i}",

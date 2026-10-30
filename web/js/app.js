@@ -817,7 +817,7 @@
         el.oracleSports.innerHTML = oracleSportKeys().map((key) => {
             const sport = state.sports[key];
             return `<button data-osport="${esc(key)}" class="${key === state.oracle.sport ? "active" : ""}" title="${esc(sport.name)}">
-                        <span class="em" aria-hidden="true">${sport.emoji}</span>${esc(sport.name.split(" ")[0])}</button>`;
+                        <span class="em" aria-hidden="true">${sport.emoji}</span>${esc(key === "f1" ? "F1" : sport.name.split(" ")[0])}</button>`;
         }).join("");
         el.oracleLeague.innerHTML = state.sports[state.oracle.sport].leagues
             .map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
@@ -851,6 +851,12 @@
                 <div class="oracle-empty"><span class="em">🗓️</span>
                     No upcoming fixtures in ESPN's calendar for ${esc(data.name)}.<br>The season may be over or between rounds.
                 </div>`;
+            return;
+        }
+        if (data.sport === "f1") {
+            el.oracleList.innerHTML = '<div class="oracle-legend"><span><i style="background:var(--oracle)"></i>Chance to win the race</span></div>'
+                + '<div class="oracle-hint"><i class="bi bi-hand-index"></i> Click a race for every driver\'s chances</div>'
+                + data.fixtures.map(raceOracleCard).join("");
             return;
         }
         const combat = data.sport === "combat";
@@ -922,6 +928,59 @@
                     <table>
                         <tr><th></th><th>${esc(heads[1])}</th><th>${esc(heads[2])}</th></tr>
                         ${rows}
+                    </table>
+                    <p class="note">${esc(p.note)}</p>
+                </details>
+            </article>`;
+    }
+
+    const driverFlag = (d) => d.flag ? `<img class="flag" src="${esc(d.flag)}" alt="" loading="lazy">`
+        : `<span class="badge-abbr">${esc(d.abbr || d.name.slice(0, 3).toUpperCase())}</span>`;
+    const average = (values) => values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) : "–";
+
+    function raceOracleCard(fixture, index) {
+        const p = fixture.prediction;
+        const date = new Date(fixture.date);
+        const meta = `
+            <div class="oc-meta">
+                <span class="ctx" title="${esc(fixture.venue)}">${esc(fmtShortDay(date))} · ${esc(fmtTime(date))} · ${esc(fixture.location || fixture.venue)}</span>
+                <span class="when">${esc(relativeTime(date))}</span>
+            </div>
+            <div class="oc-race-name" title="${esc(fixture.name)}">🏁 ${esc(fixture.name)}</div>`;
+        if (!p) {
+            return `<article class="oracle-card" style="animation-delay:${Math.min(index * 35, 350)}ms">${meta}
+                <div class="mm-muted">No prediction until this season's first race has been run.</div></article>`;
+        }
+
+        const top = p.drivers.slice(0, 3);
+        const best = top[0].win || 1;
+        const rows = top.map((d, i) => `
+            <li class="oc-driver ${i === 0 ? "picked" : ""}">
+                <span class="pos">${i + 1}</span>${driverFlag(d)}
+                <span class="nm" title="${esc(d.name)}">${esc(d.name)}${i === 0 ? '<i class="bi bi-stars" title="Oracle pick"></i>' : ""}</span>
+                <span class="pct">${pct(d.win)}</span>
+                <span class="oc-dbar"><span style="width:${(d.win / best) * 100}%"></span></span>
+            </li>`).join("");
+        const hasGrid = p.drivers.some((d) => d.grid);
+        const why = p.drivers.slice(0, 5).map((d) => `
+            <tr><td>${esc(d.abbr || d.name)}</td><td>${esc(d.season_avg)}</td><td>${average(d.last5)}</td>
+                ${hasGrid ? `<td>${d.grid ? `P${d.grid}` : "–"}</td>` : ""}<td>${pct(d.podium)}</td></tr>`).join("");
+
+        return `
+            <article class="oracle-card" data-fx="${index}" role="button" tabindex="0"
+                     aria-label="Open the full prediction: ${esc(fixture.name)}"
+                     style="animation-delay:${Math.min(index * 35, 350)}ms">
+                ${meta}
+                <ol class="oc-drivers">${rows}</ol>
+                <div class="oc-pick">
+                    <i class="bi bi-stars"></i>Pick: <strong>${esc(p.pick_name)}</strong><span>· Podium ${pct(top[0].podium)}</span>
+                    <span class="conf ${p.confidence.toLowerCase()}">${esc(p.confidence)}</span>
+                </div>
+                <details class="oc-why">
+                    <summary>Why this pick?</summary>
+                    <table>
+                        <tr><th></th><th>Pts/race</th><th>Last 5</th>${hasGrid ? "<th>Grid</th>" : ""}<th>Podium</th></tr>
+                        ${why}
                     </table>
                     <p class="note">${esc(p.note)}</p>
                 </details>
@@ -1006,7 +1065,7 @@
         });
         renderMatchModal();
         bootstrap.Modal.getOrCreateInstance(el.matchModal).show();
-        if (state.match.sport !== "combat") loadMatchDetail();
+        if (!["combat", "f1"].includes(state.match.sport)) loadMatchDetail();
     }
 
     async function loadMatchDetail() {
@@ -1038,6 +1097,7 @@
 
     function renderMatchModal() {
         if (state.match.mode === "game") { renderGameModal(); return; }
+        if (state.match.fixture.kind === "race") { renderRaceForecast(); return; }
         const { fixture, view, leagueName } = state.match;
         const betting = view === "bet";
         el.betBtn.classList.remove("d-none");
@@ -1051,6 +1111,78 @@
             : "See bookmaker odds for this match";
         el.mmBody.innerHTML = betting ? betViewHtml() : matchDetailHtml();
         el.mmBody.scrollTop = 0;
+    }
+
+    // F1 has no bookmaker view: the modal shows every driver's chances and the weekend schedule
+    function renderRaceForecast() {
+        const { fixture, leagueName } = state.match;
+        el.betBack.classList.add("d-none");
+        el.betBtn.classList.add("d-none");
+        el.mmEyebrow.textContent = leagueName;
+        el.mmTitle.textContent = fixture.name;
+        el.mmFootNote.textContent = "Predictions are for fun, not betting advice";
+        el.mmBody.innerHTML = raceForecastHtml(fixture);
+        el.mmBody.scrollTop = 0;
+    }
+
+    function raceForecastHtml(fixture) {
+        const p = fixture.prediction;
+        const date = new Date(fixture.date);
+        const pick = p?.drivers[0];
+        let html = `
+            <div class="mm-hero">
+                <div class="mm-side">${pick ? `${sideVisual(pick)}<div class="nm">${esc(pick.name)}</div>
+                    <div class="sub">Oracle pick · ${pct(pick.win)} to win</div>` : '<span class="badge-lg">?</span><div class="sub">No pick yet</div>'}</div>
+                <div class="mm-centre">
+                    <div class="time">${esc(fmtTime(date))}</div>
+                    <div class="day">${esc(fmtDay(date))}</div>
+                    <div class="cd">${esc(relativeTime(date))}</div>
+                </div>
+                <div class="mm-side"><span class="badge-lg">🏁</span><div class="nm">${esc(fixture.venue || "Circuit TBC")}</div>
+                    <div class="sub">${esc(fixture.location)}</div></div>
+            </div>`;
+
+        if (!p) {
+            html += section("bi-stars", "Oracle prediction",
+                '<div class="mm-card mm-muted">No prediction until this season\'s first race has been run.</div>');
+        } else {
+            const top = p.drivers.slice(0, 3);
+            const hasGrid = p.drivers.some((d) => d.grid);
+            const rows = p.drivers.map((d, i) => `
+                <tr class="${i === 0 ? "hl" : ""}"><td>${i + 1}</td>
+                    <td class="l">${d.flag ? `<img class="flag-sm" src="${esc(d.flag)}" alt="">` : ""}${esc(d.name)}</td>
+                    <td>${pct(d.win)}</td><td>${pct(d.podium)}</td>
+                    ${hasGrid ? `<td>${d.grid ? `P${d.grid}` : "–"}</td>` : ""}
+                    <td>${esc(d.season_avg)}</td><td class="dis">${esc(d.last5.join(" ")) || "–"}</td>
+                    <td>${d.rank ? `${d.rank} · ${d.points}` : "–"}</td></tr>`).join("");
+            html += section("bi-stars", "Oracle prediction", `
+                <div class="mm-card">
+                    <div class="mm-prob" style="--cols:3">
+                        ${top.map((d, i) => `<div class="${i === 0 ? "home" : ""}"><div class="v">${pct(d.win)}</div><div class="l" title="${esc(d.name)}">${esc(d.name)}</div></div>`).join("")}
+                    </div>
+                    <div class="oc-pick mt-2"><i class="bi bi-stars"></i>Pick: <strong>${esc(p.pick_name)}</strong>
+                        <span>· Podium ${pct(top[0].podium)}</span>
+                        <span class="conf ${p.confidence.toLowerCase()}">${esc(p.confidence)}</span></div>
+                    <div class="mm-muted mt-2">${esc(p.note)}</div>
+                </div>`);
+            html += section("bi-list-ol", "Every driver", `
+                <div class="mm-table-wrap"><table class="mm-table sc">
+                    <thead><tr><th>#</th><th class="l">Driver</th><th>Win</th><th>Podium</th>${hasGrid ? "<th>Grid</th>" : ""}
+                        <th title="Championship points per race this season">Pts/race</th><th title="Points in each of the last 5 races">Last 5</th>
+                        <th title="Championship position and points">Champ.</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table></div>`);
+        }
+
+        const sessions = (fixture.sessions || []).map((s) => {
+            const d = new Date(s.date);
+            return `<tr><td class="l">${esc(s.name)}</td><td class="l">${esc(fmtShortDay(d))}, ${esc(fmtTime(d))}</td><td class="l">${esc(s.status)}</td></tr>`;
+        }).join("");
+        if (sessions) {
+            html += section("bi-calendar-event", "Weekend schedule", `
+                <div class="mm-table-wrap"><table class="mm-table sc"><tbody>${sessions}</tbody></table></div>`);
+        }
+        return html + '<p class="mm-muted mt-3"><i class="bi bi-info-circle"></i> Times are shown in your local time. The model only knows ESPN\'s results and grid, not car upgrades, penalties or weather.</p>';
     }
 
     function sideVisual(side) {

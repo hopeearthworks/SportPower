@@ -58,7 +58,7 @@ SPORTS = {
         ],
     },
     "f1": {
-        "name": "Formula 1", "emoji": "🏎️", "kind": "race", "search_label": "Driver",
+        "name": "Formula 1", "emoji": "🏎️", "kind": "race", "search_label": "Driver", "oracle": True,
         "leagues": [{"id": "f1", "name": "Formula 1 World Championship"}],
     },
     "cricket": {

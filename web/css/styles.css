@@ -1210,6 +1210,22 @@ kbd {
 .oc-open { margin-left: auto; color: var(--muted-2); font-size: .7rem; display: inline-flex; align-items: center; gap: .2rem; }
 .oracle-card:hover .oc-open { color: var(--oracle); }
 
+/* F1 race card: the three favourites with a bar scaled to the top win chance */
+.oc-race-name { font-weight: 800; font-size: .9rem; letter-spacing: -.01em; margin-bottom: .4rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oc-drivers { list-style: none; margin: 0 0 .55rem; padding: 0; display: grid; gap: .35rem; }
+.oc-driver { display: grid; grid-template-columns: 1rem auto minmax(0, 1fr) auto; align-items: center; column-gap: .5rem; row-gap: .2rem; }
+.oc-driver .pos { font-size: .72rem; font-weight: 800; color: var(--muted-2); text-align: center; }
+.oc-driver .flag { width: 22px; height: 15px; object-fit: cover; border-radius: 2px; box-shadow: 0 0 0 1px var(--border); }
+.oc-driver .badge-abbr { font-size: .6rem; font-weight: 800; color: var(--muted); }
+.oc-driver .nm { font-weight: 600; font-size: .84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oc-driver .pct { font-weight: 800; font-size: .84rem; font-variant-numeric: tabular-nums; color: var(--muted); }
+.oc-driver.picked .nm { font-weight: 800; }
+.oc-driver.picked .pct { color: var(--oracle); }
+.oc-driver .bi-stars { color: var(--oracle); font-size: .72rem; margin-left: .3rem; }
+.oc-dbar { grid-column: 3 / 5; height: 4px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.oc-dbar span { display: block; height: 100%; background: color-mix(in srgb, var(--oracle) 55%, transparent); transition: width .6s cubic-bezier(.2, .8, .2, 1); }
+.oc-driver.picked .oc-dbar span { background: var(--oracle); }
+
 /* ==========================================================
    Match modal & bet view
    ========================================================== */
