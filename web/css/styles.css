@@ -733,16 +733,14 @@ kbd {
    ========================================================== */
 .sport-tabs {
     display: flex;
+    flex-wrap: wrap;  /* wrap rather than hide tabs off the edge when the column is narrow */
     gap: .6rem;
     padding-top: 1.75rem;
-    overflow-x: auto;
-    scrollbar-width: none;
     margin: 0 -4px;
     padding-left: 4px;
     padding-right: 4px;
     padding-bottom: 4px;
 }
-.sport-tabs::-webkit-scrollbar { display: none; }
 .sport-tab {
     display: inline-flex;
     align-items: center;
@@ -1086,6 +1084,9 @@ kbd {
 .oracle-controls { display: grid; gap: .6rem; padding: .9rem 1.1rem; border-bottom: 1px solid var(--border); }
 .oracle-sports button.active { color: var(--oracle); }
 .oracle-sports .em { font-size: .95rem; }
+/* Five sports: stack the icon over a small label so every tab fits the sidebar */
+.oracle-sports { height: auto; }
+.oracle-sports button { flex-direction: column; gap: .05rem; padding: .3rem .15rem; min-width: 0; font-size: .7rem; line-height: 1.15; }
 
 .oracle-list {
     flex: 1;
@@ -1094,6 +1095,7 @@ kbd {
     padding: .9rem 1.1rem;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content;  /* otherwise rows that clip their text (group headings) collapse to 0 */
     gap: .7rem;
     align-content: start;
     scrollbar-width: thin;
