@@ -47,7 +47,7 @@
         requestId: 0,
         countdown: AUTO_REFRESH_SECONDS,
         timer: null,
-        oracle: { sport: "", league: "", loaded: false, requestId: 0, data: null },
+        oracle: { sport: "", league: "", loaded: false, requestId: 0, data: null, cricketComps: [] },
         match: { fixture: null, sport: "", league: "", leagueName: "", detail: null, odds: null, view: "detail", requestId: 0 },
     };
 
@@ -819,8 +819,13 @@
             return `<button data-osport="${esc(key)}" class="${key === state.oracle.sport ? "active" : ""}" title="${esc(sport.name)}">
                         <span class="em" aria-hidden="true">${sport.emoji}</span>${esc(key === "f1" ? "F1" : sport.name.split(" ")[0])}</button>`;
         }).join("");
-        el.oracleLeague.innerHTML = state.sports[state.oracle.sport].leagues
-            .map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
+        // Cricket competitions change week to week, so the list grows from the fixtures the Oracle has seen
+        const leagues = [...state.sports[state.oracle.sport].leagues];
+        if (state.oracle.sport === "cricket") {
+            for (const comp of state.oracle.cricketComps) if (!leagues.some((l) => l.id === comp.id)) leagues.push(comp);
+            if (!leagues.some((l) => l.id === state.oracle.league)) leagues.push({ id: state.oracle.league, name: "Saved competition" });
+        }
+        el.oracleLeague.innerHTML = leagues.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
         el.oracleLeague.value = state.oracle.league;
     }
 
@@ -860,22 +865,28 @@
             return;
         }
         const combat = data.sport === "combat";
+        const cricket = data.sport === "cricket";
+        if (cricket && data.league === "all") {
+            const comps = data.fixtures.map((f) => ({ id: f.league_id, name: f.competition }));
+            state.oracle.cricketComps = comps.filter((c, i) => c.id && comps.findIndex((o) => o.id === c.id) === i);
+            renderOracleControls();
+        }
         const legend = combat
             ? '<span><i style="background:var(--oracle)"></i>First fighter</span><span><i style="background:var(--away)"></i>Second fighter</span>'
             : '<span><i style="background:var(--oracle)"></i>Home</span><span><i style="background:var(--muted-2)"></i>Draw</span><span><i style="background:var(--away)"></i>Away</span>';
-        // For MMA, show each fight card's name once as a heading instead of on every bout
-        let lastCard = null;
+        // Show each fight card (MMA) or competition (cricket) once as a heading instead of on every card
+        let lastGroup = null;
         const cards = data.fixtures.map((f, i) => {
             let heading = "";
-            if (combat) {
-                const cardName = f.context.slice(0, f.context.lastIndexOf(" · "));
-                if (cardName !== lastCard) heading = `<div class="oracle-group" title="${esc(cardName)}">🥊 ${esc(cardName)}</div>`;
-                lastCard = cardName;
+            const group = combat ? f.context.slice(0, f.context.lastIndexOf(" · ")) : cricket ? f.competition : null;
+            if (group && group !== lastGroup) {
+                heading = `<div class="oracle-group" title="${esc(group)}">${combat ? "🥊" : "🏏"} ${esc(group)}</div>`;
             }
+            lastGroup = group;
             return heading + oracleCard(f, i, combat);
         });
         el.oracleList.innerHTML = `<div class="oracle-legend">${legend}</div>`
-            + '<div class="oracle-hint"><i class="bi bi-hand-index"></i> Click a match for details &amp; bookmaker odds</div>'
+            + `<div class="oracle-hint"><i class="bi bi-hand-index"></i> Click a match for details${cricket ? "" : " &amp; bookmaker odds"}</div>`
             + cards.join("");
     }
 
@@ -902,14 +913,16 @@
 
         const heads = combat ? ["", "1st", "2nd"] : ["", fixture.home.abbr || "Home", fixture.away.abbr || "Away"];
         const rows = p.comparison.map((c) => `<tr><td>${esc(c.label)}</td><td>${esc(c.home)}</td><td>${esc(c.away)}</td></tr>`).join("");
-        const drawText = !combat && p.pick !== "draw" ? `<span>· Draw ${pct(pr.draw)}</span>` : "";
+        const drawText = !combat && p.pick !== "draw" && pr.draw > 0.005 ? `<span>· Draw ${pct(pr.draw)}</span>` : "";
+        // MMA shows the bout type and cricket the format (Test, T20 ...) after the start time
+        const tag = combat ? fixture.context.slice(fixture.context.lastIndexOf(" · ") + 3) : fixture.format || "";
 
         return `
             <article class="oracle-card" data-fx="${index}" role="button" tabindex="0"
                      aria-label="Open details and odds: ${esc(fixture.home.name)} v ${esc(fixture.away.name)}"
                      style="animation-delay:${Math.min(index * 35, 350)}ms">
                 <div class="oc-meta">
-                    <span class="ctx" title="${esc(combat ? fixture.context : fixture.venue)}">${esc(fmtShortDay(date))} · ${esc(fmtTime(date))}${combat ? ` · ${esc(fixture.context.slice(fixture.context.lastIndexOf(" · ") + 3))}` : ""}</span>
+                    <span class="ctx" title="${esc(combat || fixture.format ? fixture.context : fixture.venue)}">${esc(fmtShortDay(date))} · ${esc(fmtTime(date))}${tag ? ` · ${esc(tag)}` : ""}</span>
                     <span class="when">${esc(relativeTime(date))}</span>
                 </div>
                 ${team(fixture.home, "home")}
@@ -1071,8 +1084,12 @@
     async function loadMatchDetail() {
         const id = ++state.match.requestId;
         const { sport, league, fixture } = state.match;
+        // Cricket has no match-centre feed; its game summary gives the venue, notes and news instead
+        const url = sport === "cricket"
+            ? `/api/game?${new URLSearchParams({ sport, league, id: fixture.id, cleague: fixture.league_id })}`
+            : `/api/match?${new URLSearchParams({ sport, league, id: fixture.id })}`;
         try {
-            const detail = await api(`/api/match?${new URLSearchParams({ sport, league, id: fixture.id })}`);
+            const detail = await api(url);
             if (id !== state.match.requestId) return;
             state.match.detail = detail;
         } catch (error) {
@@ -1098,17 +1115,18 @@
     function renderMatchModal() {
         if (state.match.mode === "game") { renderGameModal(); return; }
         if (state.match.fixture.kind === "race") { renderRaceForecast(); return; }
-        const { fixture, view, leagueName } = state.match;
+        const { fixture, view, leagueName, sport } = state.match;
         const betting = view === "bet";
-        el.betBtn.classList.remove("d-none");
-        el.mmEyebrow.textContent = betting ? "Where to bet" : leagueName;
+        const noOdds = sport === "cricket";  // the odds lookup doesn't cover cricket
+        el.betBtn.classList.toggle("d-none", noOdds);
+        el.mmEyebrow.textContent = betting ? "Where to bet" : fixture.competition || leagueName;
         el.mmTitle.textContent = `${fixture.home.name} v ${fixture.away.name}`;
         el.betBack.classList.toggle("d-none", !betting);
         el.betBtn.classList.toggle("back", betting);
         el.betBtn.innerHTML = betting ? '<i class="bi bi-arrow-left"></i> Back to match' : '<i class="bi bi-cash-coin"></i> Bet';
         el.mmFootNote.innerHTML = betting
             ? '18+ · Bets are placed on the bookmaker\'s own site · <a href="https://www.begambleaware.org" target="_blank" rel="noopener noreferrer">BeGambleAware.org</a>'
-            : "See bookmaker odds for this match";
+            : noOdds ? "Predictions are for fun, not betting advice" : "See bookmaker odds for this match";
         el.mmBody.innerHTML = betting ? betViewHtml() : matchDetailHtml();
         el.mmBody.scrollTop = 0;
     }
@@ -1203,7 +1221,7 @@
             : fixture.venue;
         const sub = (side) => combat ? [side.record, side.country].filter(Boolean).join(" · ") : (side.form ? `Form ${side.form}` : "");
 
-        const outcomes = combat ? ["home", "away"] : ["home", "draw", "away"];
+        const outcomes = combat || pr.draw <= 0.005 ? ["home", "away"] : ["home", "draw", "away"];
         const labels = { home: fixture.home.name, draw: "Draw", away: fixture.away.name };
         const heads = combat ? ["Fighter 1", "Fighter 2"] : [fixture.home.abbr || "Home", fixture.away.abbr || "Away"];
 
@@ -1217,7 +1235,7 @@
                 </div>
                 <div class="mm-side">${sideVisual(fixture.away)}<div class="nm">${esc(fixture.away.name)}</div><div class="sub">${esc(sub(fixture.away))}</div></div>
             </div>
-            ${venue ? `<div class="mm-venue"><i class="bi bi-geo-alt"></i> ${esc(venue)}${combat ? ` · ${esc(fixture.context)}` : ""}</div>` : ""}
+            ${venue ? `<div class="mm-venue"><i class="bi bi-geo-alt"></i> ${esc(venue)}${combat ? ` · ${esc(fixture.context)}` : fixture.description ? ` · ${esc(fixture.description)}` : ""}</div>` : ""}
 
             <section class="mm-section">
                 <h3><i class="bi bi-stars"></i>Oracle prediction</h3>
@@ -1242,6 +1260,15 @@
 
         if (combat) {
             return html + `<p class="mm-muted mt-3"><i class="bi bi-info-circle"></i> ESPN doesn't publish detailed fight previews, so this view uses the fighters' career records.</p>`;
+        }
+        if (sport === "cricket") {
+            // Recent results come with the forecast; notes and news follow from the game summary
+            html += formSectionHtml({ form: fixture.recent }, fixture.home, fixture.away);
+            if (!detail || detail.error) return html + detailPlaceholder(detail);
+            if (detail.notes?.length) {
+                html += section("bi-info-circle", "Match notes", `<dl class="settings-list mm-notes m-0">${detail.notes.map((n) => `<dt>${esc(n.label)}</dt><dd>${esc(n.text)}</dd>`).join("")}</dl>`);
+            }
+            return html + contextSectionsHtml({ news: detail.news }, fixture.home, fixture.away);
         }
         if (!detail) return html + '<div class="mm-skel"></div><div class="mm-skel"></div>';
         if (detail.error) return html + `<p class="mm-muted mt-3"><i class="bi bi-exclamation-circle"></i> Couldn't load more detail: ${esc(detail.error)}</p>`;

@@ -62,7 +62,7 @@ SPORTS = {
         "leagues": [{"id": "f1", "name": "Formula 1 World Championship"}],
     },
     "cricket": {
-        "name": "Cricket", "emoji": "🏏", "kind": "match", "search_label": "Team",
+        "name": "Cricket", "emoji": "🏏", "kind": "match", "search_label": "Team", "oracle": True,
         "dynamic_leagues": True,
         "leagues": [{"id": "all", "name": "All competitions"}],
     },
@@ -140,6 +140,8 @@ def espn_path(sport, league):
         return "rugby-league/3" if league == "nrl" else f"rugby/{league}"
     if sport == "f1":
         return "racing/f1"
+    if sport == "cricket":
+        return f"cricket/{league}"
     return f"mma/{league}"
 
 

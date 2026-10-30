@@ -24,6 +24,12 @@ Once qualifying has finished, the grid counts for 40% (pole = 25 points,
 drawing the finishing order with each driver's chance of beating the rest
 in proportion to rating^2.5, to get win and podium chances. Chances are
 blended 10% towards an open race where every driver is equal.
+
+Cricket - the same team model, without scoring margin (cricket tables don't
+publish runs for and against): 60% season win rate where the competition has
+a table, 40% form from results in the last 3 weeks, plus home advantage.
+Only multi-day matches (Tests, first-class) can be drawn; limited-overs
+matches always have a winner.
 """
 
 import logging
@@ -47,6 +53,12 @@ TUNING = {
                  "prior": {"home": 0.45, "draw": 0.27, "away": 0.28}, "margin_label": "Goal diff / game"},
     "rugby": {"home_edge": 0.08, "margin_scale": 20.0, "draw_base": 0.03, "steepness": 5,
               "prior": {"home": 0.58, "draw": 0.03, "away": 0.39}, "margin_label": "Points diff / game"},
+    # Cricket is split by format: draws only happen in multi-day matches
+    # Cricket form is shrunk towards average, as it often covers only one or two matches
+    "cricket_long": {"home_edge": 0.08, "draw_base": 0.28, "steepness": 3, "shrink_form": True,
+                     "prior": {"home": 0.42, "draw": 0.28, "away": 0.30}, "margin_label": None},
+    "cricket_short": {"home_edge": 0.05, "draw_base": 0.0, "steepness": 3, "shrink_form": True,
+                      "prior": {"home": 0.53, "draw": 0.0, "away": 0.47}, "margin_label": None},
 }
 PRIOR_WEIGHT = 0.15
 COMBAT_PRIOR_WEIGHT = 0.25  # records are a weaker signal, so lean harder on 50/50
@@ -57,6 +69,10 @@ F1_PRIOR_WEIGHT = 0.10    # blend towards every driver having the same chance
 F1_GRID_WEIGHT = 0.40     # share of the rating taken from the starting grid once qualifying is done
 F1_SHARPNESS = 2.5        # how strongly a higher rating turns into finishing ahead
 F1_SIMULATIONS = 5000
+
+CRICKET_DAYS_AHEAD = 14   # days scanned for upcoming matches
+CRICKET_DAYS_BACK = 21    # days of results scanned to work out each team's form
+CRICKET_LONG_FORMATS = ("test", "first-class")
 
 _cache = {}
 _cache_lock = threading.Lock()
@@ -205,6 +221,94 @@ def _drivers():
     return [d for d in drivers if last_round < 0 or last_round in d["rounds"]]
 
 
+def _cricket_day(day, strict=False):
+    """One day of ESPN's cricket feed. Older days barely change, so they're cached for longer."""
+    key = ("cricket-day", day)
+    ttl = 6 * 3600 if day < datetime.now(timezone.utc).date() - timedelta(days=2) else CACHE_SECONDS
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+    params = {"sport": "cricket", "dates": day.strftime("%Y%m%d")}
+    data = sports.get_json(sports.ESPN_CRICKET, params) if strict else _safe_get(sports.ESPN_CRICKET, params)
+    if data:
+        with _cache_lock:
+            _cache[key] = (time.time(), data)
+    return data
+
+
+def _cricket_events(data):
+    """(competition, event, {"home": competitor, "away": competitor}) for every two-team match."""
+    for item in ((data.get("sports") or [{}])[0]).get("leagues", []):
+        for event in item.get("events", []):
+            teams = {c.get("homeAway"): c for c in event.get("competitors", [])}
+            if "home" in teams and "away" in teams:
+                yield item, event, teams
+
+
+def _cricket_state(event):
+    return ((event.get("fullStatus") or {}).get("type") or {}).get("state") or event.get("status", "")
+
+
+def _cricket_format(event):
+    """The format label (Test, T20, ...) and whether it's a multi-day match that can be drawn."""
+    card = (event.get("class") or {}).get("generalClassCard") or event.get("eventType") or ""
+    days = next((n.get("text", "") for n in event.get("notes", []) if n.get("type") == "matchdays"), "")
+    long = any(f in card.lower() for f in CRICKET_LONG_FORMATS) or any(f"{n}-day" in days for n in range(3, 6))
+    return card, long
+
+
+def _upcoming_cricket(league):
+    """The next scheduled matches, walking forward a day at a time."""
+    today = datetime.now(timezone.utc).date()
+    days = [today + timedelta(days=i) for i in range(CRICKET_DAYS_AHEAD + 1)]
+    _cricket_day(today, strict=True)  # surface a connection error instead of showing "no fixtures"
+    found = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for start in range(0, len(days), 4):
+            if len(found) >= FIXTURE_COUNT:
+                break
+            for data in pool.map(_cricket_day, days[start:start + 4]):
+                for item, event, teams in _cricket_events(data):
+                    undecided = any((c.get("displayName") or "TBA").upper() in ("TBA", "TBC", "TBD")
+                                    for c in teams.values())  # knockout slots not filled yet
+                    if (league == "all" or item.get("id") == league) and _cricket_state(event) == "pre" and not undecided:
+                        found[event.get("id")] = (item, event, teams)
+    return sorted(found.values(), key=lambda m: m[1].get("date") or "")[:FIXTURE_COUNT]
+
+
+def _cricket_form():
+    """Each team's results over the last few weeks, oldest first, keyed by team id."""
+    today = datetime.now(timezone.utc).date()
+    days = [today - timedelta(days=i) for i in range(CRICKET_DAYS_BACK, -1, -1)]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        feeds = list(pool.map(_cricket_day, days))
+
+    seen, games = set(), {}
+    for data in feeds:
+        for item, event, teams in _cricket_events(data):
+            if _cricket_state(event) != "post" or event.get("id") in seen:
+                continue
+            seen.add(event.get("id"))
+            winner = next((side for side, c in teams.items() if c.get("winner")), None)
+            if not winner and not _cricket_format(event)[1]:
+                continue  # a limited-overs match with no winner was abandoned: no result
+            for side, other in (("home", "away"), ("away", "home")):
+                me, opponent = teams[side], teams[other]
+                games.setdefault(str(me.get("id")), []).append({
+                    "date": event.get("date"),
+                    "opponent": opponent.get("displayName", ""),
+                    "opponent_logo": opponent.get("logo", ""),
+                    "venue": "H" if side == "home" else "A",
+                    "score": me.get("score", ""),
+                    "result": "D" if not winner else "W" if winner == side else "L",
+                    "competition": item.get("name", ""),
+                })
+    for results in games.values():
+        results.sort(key=lambda g: g["date"] or "")
+    return games
+
+
 def _standings(sport, league):
     """Map team id -> season stats. Returns {} when the competition has no table."""
     path = sports.espn_path(sport, league)
@@ -213,14 +317,18 @@ def _standings(sport, league):
     for group in data.get("children") or [data]:
         for entry in (group.get("standings") or {}).get("entries", []):
             stats = {s.get("name"): s.get("value") for s in entry.get("stats", [])}
-            played = stats.get("gamesPlayed") or 0
+            first = lambda *names: next((stats[n] for n in names if stats.get(n) is not None), 0) or 0
+            wins = first("wins", "gamesWon", "matchesWon")
+            draws = first("ties", "gamesDrawn", "matchesDraw") + first("matchesTied")
+            losses = first("losses", "gamesLost", "matchesLost")
             table[str(entry.get("team", {}).get("id"))] = {
-                "played": played,
-                "wins": stats.get("wins", stats.get("gamesWon")) or 0,
-                "draws": stats.get("ties", stats.get("gamesDrawn")) or 0,
-                "losses": stats.get("losses", stats.get("gamesLost")) or 0,
-                "for": stats.get("pointsFor") or 0,
-                "against": stats.get("pointsAgainst") or 0,
+                # Cricket's matchesPlayed counts no-results, so it's rebuilt from the results
+                "played": stats.get("gamesPlayed") or wins + draws + losses,
+                "wins": wins,
+                "draws": draws,
+                "losses": losses,
+                "for": stats.get("pointsFor"),      # None for cricket, which has no runs for/against
+                "against": stats.get("pointsAgainst"),
                 "rank": stats.get("rank"),
             }
     return table
@@ -241,14 +349,22 @@ def _ordinal(n):
 def _team_rating(side, table, tuning):
     row = table.get(str(side.get("id")))
     form = [c for c in (side.get("form") or "") if c in "WDL"][-5:]
-    form_score = sum({"W": 1, "D": 0.5, "L": 0}[c] for c in form) / len(form) if form else 0.5
+    points = sum({"W": 1, "D": 0.5, "L": 0}[c] for c in form)
+    if tuning.get("shrink_form"):
+        form_score = (points + 1) / (len(form) + 2)  # one or two results shouldn't count as a full run of form
+    else:
+        form_score = points / len(form) if form else 0.5
 
     if row and row["played"]:
         played = row["played"]
         win_rate = (row["wins"] + 0.5 * row["draws"] + 1) / (played + 2)
-        margin = (row["for"] - row["against"]) / played
-        margin_score = 0.5 + max(-1.0, min(1.0, margin / tuning["margin_scale"])) / 2
-        rating = 0.45 * win_rate + 0.35 * form_score + 0.20 * margin_score
+        if row["for"] is None or row["against"] is None:  # no scoring totals in the table (cricket)
+            margin = None
+            rating = 0.6 * win_rate + 0.4 * form_score
+        else:
+            margin = (row["for"] - row["against"]) / played
+            margin_score = 0.5 + max(-1.0, min(1.0, margin / tuning["margin_scale"])) / 2
+            rating = 0.45 * win_rate + 0.35 * form_score + 0.20 * margin_score
     else:
         margin = None
         rating = 0.65 * 0.5 + 0.35 * form_score  # no table: treat season strength as average
@@ -283,8 +399,9 @@ def predict_match(event, table, sport):
                            "away": _ordinal(row_a["rank"]) if row_a and row_a["rank"] else "–"})
         record = lambda r: f"{int(r['wins'])}-{int(r['draws'])}-{int(r['losses'])}" if r else "–"
         comparison.append({"label": "Record (W-D-L)", "home": record(row_h), "away": record(row_a)})
-        signed = lambda m: "–" if m is None else f"{m:+.1f}"
-        comparison.append({"label": tuning["margin_label"], "home": signed(margin_h), "away": signed(margin_a)})
+        if tuning["margin_label"]:
+            signed = lambda m: "–" if m is None else f"{m:+.1f}"
+            comparison.append({"label": tuning["margin_label"], "home": signed(margin_h), "away": signed(margin_a)})
     comparison.append({"label": "Form (last 5)", "home": form_h or "–", "away": form_a or "–"})
     comparison.append({"label": "Oracle rating", "home": f"{r_home * 100:.0f}", "away": f"{r_away * 100:.0f}"})
 
@@ -410,6 +527,55 @@ def _side_summary(side):
     return summary
 
 
+def _cricket_forecast(league):
+    """Upcoming cricket matches across competitions, each predicted with its own competition's table."""
+    upcoming = _upcoming_cricket(league)
+    form = _cricket_form() if upcoming else {}
+    league_ids = sorted({item.get("id") for item, _, _ in upcoming})
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        tables = dict(zip(league_ids, pool.map(lambda lid: _standings("cricket", lid), league_ids)))
+
+    fixtures = []
+    for item, event, teams in upcoming:
+        card, long = _cricket_format(event)
+        sides = {}
+        for key, competitor in teams.items():
+            team_id = str(competitor.get("id") or "")
+            sides[key] = {"id": team_id, "name": competitor.get("displayName", "TBC"),
+                          "abbr": competitor.get("abbreviation", ""), "logo": competitor.get("logo", ""),
+                          "form": "".join(g["result"] for g in form.get(team_id, []))[-5:]}
+        table = tables.get(item.get("id")) or {}
+        prediction = predict_match(sides, table, "cricket_long" if long else "cricket_short")
+        has_table = any(sides[k]["id"] in table for k in sides)
+        has_form = any(sides[k]["form"] for k in sides)
+        prediction["note"] = (
+            "Based on the competition table, results in the last 3 weeks and home advantage." if has_table
+            else "Based on results in the last 3 weeks and home advantage." if has_form
+            else "Neither team has a table or recent results in ESPN's feed, so this pick is mostly home advantage.")
+        if long:
+            prediction["note"] += " Multi-day matches can end in a draw."
+        fixtures.append({
+            "id": event.get("id"),
+            "date": event.get("date"),
+            "venue": event.get("location", ""),
+            "context": f"{item.get('name', 'Cricket')} · {event.get('title') or card or 'Match'}",
+            "competition": item.get("name", "Cricket"),
+            "league_id": item.get("id", ""),
+            "format": card,
+            "description": event.get("description", ""),
+            "home": _side_summary(sides["home"]),
+            "away": _side_summary(sides["away"]),
+            # Same shape as the football form block, so the match modal can reuse its layout
+            "recent": [{"team": s["name"], "team_id": s["id"], "logo": s["logo"],
+                        "games": list(reversed(form.get(s["id"], [])[-5:]))} for s in (sides["home"], sides["away"])],
+            "prediction": prediction,
+        })
+
+    names = {item.get("id"): item.get("name") for item, _, _ in upcoming}
+    name = "All cricket competitions" if league == "all" else names.get(league) or "Cricket"
+    return name, "", fixtures
+
+
 def build_forecast(sport, league):
     """Return the next fixtures with predictions. Raises sports.FetchError on failure."""
     if sport == "f1":
@@ -437,6 +603,8 @@ def build_forecast(sport, league):
             "away": _side_summary(item["bout"]["fighters"][1]),
             "prediction": predict_bout(item["bout"]),
         } for i, item in enumerate(bouts)]
+    elif sport == "cricket":
+        name, logo, fixtures = _cricket_forecast(league)
     else:
         name, logo, events = _upcoming_team_events(sport, league)
         table = _standings(sport, league)
